@@ -29,7 +29,7 @@ To build the software without Docker: install llvm, clang, libbpf-dev, iproute2 
 ## How to use
 Load the `xdp_dns_kern.o` BPF object using iproute2 on that target network interface (veth0 in the example below):
 ```bash
-ip link set dev veth0 bpf obj ./src/xdp_dns_kern.o
+ip link set dev veth0 xdp obj ./src/xdp_dns_kern.o
 ```
 
 Use the `xdns` user space application to manage DNS records.
