@@ -88,6 +88,7 @@ int xdp_dns(struct xdp_md *ctx)
         {
             #ifdef DEBUG
             bpf_printk("Packet dest port 53");
+            bpf_printk("Data pointer starts at %u", data);
             #endif
 
             //Boundary check for min DNS header
@@ -301,9 +302,10 @@ static inline void modify_packet_with_response(struct xdp_md *ctx, struct dns_hd
     response.data_length = bpf_htons((uint16_t)sizeof(a->ip_addr));
 
     //Determine increment of tail size of a default DNS response and one IPv4 address (in_addr)
-    int tailadjust = data_end - answer_start + sizeof(response) + sizeof(a->ip_addr);
+    int tailadjust = answer_start + sizeof(response) + sizeof(a->ip_addr) - data_end;
     #ifdef DEBUG
     bpf_printk("Query length is %i", query_length);
+    bpf_printk("Answer start at %u", answer_start);
     bpf_printk("Adjust tail with %i bytes", tailadjust);
     bpf_printk("Current data_end: %u", data_end);
     #endif
