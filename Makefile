@@ -2,6 +2,8 @@
 
 #DEBUG = y  enables printk in the BPF program
 DEBUG ?= n
+#Compiler flags for specific DNS features
+EDNS ?= y #RFC6891
 
 all: builder xdp_dns
 

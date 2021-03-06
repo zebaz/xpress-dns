@@ -7,6 +7,9 @@ LLC = llc
 #DEBUG = y  enables printk in the BPF program
 DEBUG ?= n
 
+#Specific DNS features that can be enabled/disabled
+FEATURE_EDNS ?= y
+
 #Path to include files of respectively libbpf-dev and iproute2
 LIBBPF_INCLUDE ?= /usr/include/bpf
 IPROUTE_INCLUDE ?= /usr/include/iproute2
@@ -28,6 +31,10 @@ BPF_CFLAGS ?= -I $(LIBBPF_INCLUDE) \
 
 ifeq ($(DEBUG),y)
 	BPF_EXTRA_FLAGS += -D DEBUG
+endif
+
+ifeq ($(FEATURE_EDNS),y)
+	BPF_EXTRA_FLAGS += -D EDNS
 endif
 
 all: llvm-check xdp_dns_kern xdp_dns

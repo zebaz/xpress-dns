@@ -6,7 +6,7 @@
 //RFC1034: the total number of octets that represent a domain name is limited to 255.
 //We need to be aligned so the struct does not include padding bytes. We'll set the length to 256.
 //Otherwise padding bytes will generate problems with the verifier, as it ?could contain arbitrary data from memory?
- #define MAX_DNS_NAME_LENGTH 256
+#define MAX_DNS_NAME_LENGTH 256
 
 struct dns_hdr
 {
@@ -26,6 +26,16 @@ struct dns_hdr
     uint16_t auth_count; //Number of authority RRs
     uint16_t add_count;  //Number of resource RRs
 };
+
+#ifdef EDNS
+struct ar_hdr {
+    uint8_t name;
+    uint16_t type;
+    uint16_t size;
+    uint32_t ex_rcode;
+    uint16_t rcode_len;
+} __attribute__((packed));
+#endif
 
 //Used as key in our hashmap
 struct dns_query {
