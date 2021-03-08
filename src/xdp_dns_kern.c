@@ -32,6 +32,7 @@ Foundation, Inc., 59 Temple Place - Suite 330
 //bpf_elf.h is part of iproute2
 #include <bpf_elf.h>
 
+
 #define DEFAULT_ACTION XDP_PASS
 
 //Hash table for DNS A Records
@@ -56,11 +57,17 @@ static inline void modify_dns_header_response(struct dns_hdr *dns_hdr);
 static inline void update_ip_checksum(void *data, int len, uint16_t *checksum_location);
 static inline void copy_to_pkt_buf(struct xdp_md *ctx, void *dst, void *src, size_t n);
 static inline void swap_mac(uint8_t *src_mac, uint8_t *dst_mac);
+
+
 char dns_buffer[512];
 
 SEC("prog")
 int xdp_dns(struct xdp_md *ctx)
 {
+    #ifdef DEBUG
+    uint64_t start = bpf_ktime_get_ns();
+    #endif
+
     void *data_end = (void *)(unsigned long)ctx->data_end;
     void *data = (void *)(unsigned long)ctx->data;
 
@@ -222,6 +229,13 @@ int xdp_dns(struct xdp_md *ctx)
 
                         #ifdef DEBUG
                         bpf_printk("XDP_TX");
+                        #endif
+
+            
+                        #ifdef DEBUG
+                        uint64_t end = bpf_ktime_get_ns();
+                        uint64_t elapsed = end-start;
+                        bpf_printk("Time elapsed: %d", elapsed);
                         #endif
 
                         //Emit modified packet
@@ -480,6 +494,7 @@ static inline void swap_mac(uint8_t *src_mac, uint8_t *dst_mac)
         *(dst_mac + i) = tmp_src;
     }
 }
+
 
 char _license[] SEC("license") = "GPL";
 __u32 _version SEC("version") = LINUX_VERSION_CODE;
