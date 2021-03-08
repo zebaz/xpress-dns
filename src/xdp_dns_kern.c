@@ -47,13 +47,16 @@ struct bpf_elf_map SEC("maps") xdns_a_records = {
 
 static int match_a_records(struct xdp_md *ctx, struct dns_query *q, struct a_record *a);
 static int parse_query(struct xdp_md *ctx, void *query_start, struct dns_query *q);
-static inline void pkt_add_query_response(struct xdp_md *ctx, struct dns_hdr *dns_hdr, int query_length, struct a_record *a);
+static void create_query_response(struct a_record *a, char *dns_buffer, size_t *buf_size);
 #ifdef EDNS
-static int handle_opt_record(struct xdp_md *ctx, struct dns_hdr *dns_hdr, int query_length, struct ar_hdr *opt);
-static inline void pkt_add_ar_response(struct xdp_md *ctx, struct dns_hdr *dns_hdr, int query_length, struct ar_hdr *ar);
+static inline int create_ar_response(struct ar_hdr *ar, char *dns_buffer, size_t *buf_size);
+static inline int parse_ar(struct xdp_md *ctx, struct dns_hdr *dns_hdr, int query_length, struct ar_hdr *ar);
 #endif
+static inline void modify_dns_header_response(struct dns_hdr *dns_hdr);
 static inline void update_ip_checksum(void *data, int len, uint16_t *checksum_location);
+static inline void copy_to_pkt_buf(struct xdp_md *ctx, void *dst, void *src, size_t n);
 static inline void swap_mac(uint8_t *src_mac, uint8_t *dst_mac);
+char dns_buffer[512];
 
 SEC("prog")
 int xdp_dns(struct xdp_md *ctx)
@@ -96,23 +99,23 @@ int xdp_dns(struct xdp_md *ctx)
             bpf_printk("Data pointer starts at %u", data);
             #endif
 
-            //Boundary check for min DNS header
+            //Boundary check for minimal DNS header
             if (data + sizeof(*eth) + sizeof(*ip) + sizeof(*udp) + sizeof(struct dns_hdr) > data_end)
             {
                 return DEFAULT_ACTION;
             }
 
-            struct dns_hdr *dns = data + sizeof(*eth) + sizeof(*ip) + sizeof(*udp);
+            struct dns_hdr *dns_hdr = data + sizeof(*eth) + sizeof(*ip) + sizeof(*udp);
 
             //Check if header contains a standard query
-            if (dns->qr == 0 && dns->opcode == 0)
+            if (dns_hdr->qr == 0 && dns_hdr->opcode == 0)
             {
                 #ifdef DEBUG
-                bpf_printk("DNS query transaction id %u", bpf_ntohs(dns->transaction_id));
+                bpf_printk("DNS query transaction id %u", bpf_ntohs(dns_hdr->transaction_id));
                 #endif
 
-                //Get a pointer to the start of the dns queries
-                void *query_start = (void *)dns + sizeof(struct dns_hdr);
+                //Get a pointer to the start of the DNS query
+                void *query_start = (void *)dns_hdr + sizeof(struct dns_hdr);
 
                 //We will only be parsing a single query for now
                 struct dns_query q;
@@ -130,79 +133,100 @@ int xdp_dns(struct xdp_md *ctx)
                 //If query matches...
                 if (res == 0)
                 {
+                    size_t buf_size = 0;
+
+                    //Change DNS header to a valid response header
+                    modify_dns_header_response(dns_hdr);
+
+                    //Create DNS response and add to temporary buffer.
+                    create_query_response(&a_record, &dns_buffer[buf_size], &buf_size);
+    
                     #ifdef EDNS
-                    //Check if AR flag is set. 
-                    //We'll need to handle additional record first before modifying packet buffer with response
-                    struct ar_hdr ar;
-                    ar.type = 0;    
-                    if(dns->add_count > 0)
+                    //If an additional record is present
+                    if(dns_hdr->add_count > 0)
                     {
-                        //Handle OPT record. Formulate an answer if applicable
-                        handle_opt_record(ctx, dns, query_length, &ar);
+                        //Parse AR record
+                        struct ar_hdr ar;
+                        if(parse_ar(ctx, dns_hdr, query_length, &ar) != -1)
+                        {     
+                            //Create AR response and add to temporary buffer
+                            create_ar_response(&ar, &dns_buffer[buf_size], &buf_size);
+                        }
                     }
                     #endif
 
-                    //Modify packet, adding DNS query response. Packet length will be adjusted accordingly.
-                    pkt_add_query_response(ctx, dns, query_length, &a_record);
-    
-                    //Because we adjusted packet length, mem addresses might be changed.
-                    //Reinit pointers, as verifier will complain otherwise.
-                    data = (void *)(unsigned long)ctx->data;
-                    data_end = (void *)(unsigned long)ctx->data_end;
-                    eth = data;
-                    ip = data + sizeof(struct ethhdr);
-                    udp = data + sizeof(struct ethhdr) + sizeof(struct iphdr);
-                    dns = data + sizeof(struct ethhdr) + sizeof(struct iphdr) + sizeof(struct dns_hdr);
+                    //Start our response [query_length] bytes beyond the header
+                    void *answer_start = (void *)dns_hdr + sizeof(struct dns_hdr) + query_length;
+                    //Determine increment of packet buffer
+                    int tailadjust = answer_start + buf_size - data_end;
 
-                    #ifdef EDNS
-                    if(ar.type > 0)
+                    //Adjust packet length accordingly
+                    if (bpf_xdp_adjust_tail(ctx, tailadjust))
                     {
-                        pkt_add_ar_response(ctx, dns, query_length, &ar);
+                        #ifdef DEBUG
+                        bpf_printk("Adjust tail fail");
+                        #endif
+                    }
+                    else
+                    {
                         //Because we adjusted packet length, mem addresses might be changed.
                         //Reinit pointers, as verifier will complain otherwise.
                         data = (void *)(unsigned long)ctx->data;
                         data_end = (void *)(unsigned long)ctx->data_end;
+
+                        //Copy bytes from our temporary buffer to packet buffer
+                        copy_to_pkt_buf(ctx, data + sizeof(struct ethhdr) +
+                                sizeof(struct iphdr) +
+                                sizeof(struct udphdr) +
+                                sizeof(struct dns_hdr) +
+                                query_length,
+                            &dns_buffer[0], buf_size);
+
                         eth = data;
                         ip = data + sizeof(struct ethhdr);
                         udp = data + sizeof(struct ethhdr) + sizeof(struct iphdr);
-                        dns = data + sizeof(struct ethhdr) + sizeof(struct iphdr) + sizeof(struct dns_hdr);
-                    }
-                    #endif
 
-                    //Do a new boundary check
-                    if (data + sizeof(struct ethhdr) + sizeof(struct iphdr) + sizeof(struct udphdr) > data_end)
-                    {
+                        //Do a new boundary check
+                        if (data + sizeof(struct ethhdr) + sizeof(struct iphdr) + sizeof(struct udphdr) > data_end)
+                        {
+                            #ifdef DEBUG
+                            bpf_printk("Error: Boundary exceeded");
+                            #endif
+                            return DEFAULT_ACTION;
+                        }
+
+                        //Adjust UDP length and IP length
+                        uint16_t iplen = (data_end - data) - sizeof(struct ethhdr);
+                        uint16_t udplen = (data_end - data) - sizeof(struct ethhdr) - sizeof(struct iphdr);
+                        ip->tot_len = bpf_htons(iplen);
+                        udp->len = bpf_htons(udplen);
+
+                        //Swap eth macs
+                        swap_mac((uint8_t *)eth->h_source, (uint8_t *)eth->h_dest);
+
+                        //Swap src/dst IP
+                        uint32_t src_ip = ip->saddr;
+                        ip->saddr = ip->daddr;
+                        ip->daddr = src_ip;
+
+                        //Set UDP checksum to zero
+                        udp->check = 0;
+
+                        //Swap udp src/dst ports
+                        uint16_t tmp_src = udp->source;
+                        udp->source = udp->dest;
+                        udp->dest = tmp_src;
+
+                        //Recalculate IP checksum
+                        update_ip_checksum(ip, sizeof(struct iphdr), &ip->check);
+
                         #ifdef DEBUG
-                        bpf_printk("Error: Boundary exceeded");
+                        bpf_printk("XDP_TX");
                         #endif
-                        return DEFAULT_ACTION;
+
+                        //Emit modified packet
+                        return XDP_TX;
                     }
-
-                    //Swap eth macs
-                    swap_mac((uint8_t *)eth->h_source, (uint8_t *)eth->h_dest);
-
-                    //Swap src/dst IP
-                    uint32_t src_ip = ip->saddr;
-                    ip->saddr = ip->daddr;
-                    ip->daddr = src_ip;
-
-                    //Set UDP checksum to zero
-                    udp->check = 0;
-
-                    //Swap udp src/dst ports
-                    uint16_t tmp_src = udp->source;
-                    udp->source = udp->dest;
-                    udp->dest = tmp_src;
-
-                    //Recalculate IP checksum
-                    update_ip_checksum(ip, sizeof(struct iphdr), &ip->check);
-
-                    #ifdef DEBUG
-                    bpf_printk("XDP_TX");
-                    #endif
-
-                    //Emit modified packet
-                    return XDP_TX;
                 }
             }
         }
@@ -309,36 +333,46 @@ static int parse_query(struct xdp_md *ctx, void *query_start, struct dns_query *
     return -1;
 }
 
+
 #ifdef EDNS
-//Parse OPT record and formulate response
-static int handle_opt_record(struct xdp_md *ctx, struct dns_hdr *dns_hdr, int query_length, struct ar_hdr *opt)
+//Parse additonal record
+static inline int parse_ar(struct xdp_md *ctx, struct dns_hdr *dns_hdr, int query_length, struct ar_hdr *ar)
 {
     #ifdef DEBUG
-    bpf_printk("Handling additional record in query");
+    bpf_printk("Parsing additional record in query");
     #endif
-    
+
     void *data_end = (void *)(long)ctx->data_end;
 
-    //Check for OPT record (RFC6891)
-    struct ar_hdr *ar  = (void *) dns_hdr + query_length + sizeof(struct dns_response);
+    //Parse ar record
+    ar  = (void *) dns_hdr + query_length + sizeof(struct dns_response);
     if((void*) ar + sizeof(struct ar_hdr) > data_end){
         #ifdef DEBUG
         bpf_printk("Error: boundary exceeded while parsing additional record");
         #endif
         return -1;
-    } 
+    }
 
+    return 0;
+}
+
+static inline int create_ar_response(struct ar_hdr *ar, char *dns_buffer, size_t *buf_size)
+{
+    //Check for OPT record (RFC6891)
     if(ar->type == bpf_htons(41)){
         #ifdef DEBUG
         bpf_printk("OPT record found");
         #endif
+        struct ar_hdr *ar_response = (struct ar_hdr *) &dns_buffer[0];
         //We've received an OPT record, advertising the clients' UDP payload size
         //Respond that we're serving a payload size of 512 and not serving any additional records.
-        opt->name = 0;
-        opt->type = bpf_htons(41);
-        opt->size = bpf_htons(512);
-        opt->ex_rcode = 0;
-        opt->rcode_len = 0;
+        ar_response->name = 0;
+        ar_response->type = bpf_htons(41);
+        ar_response->size = bpf_htons(512);
+        ar_response->ex_rcode = 0;
+        ar_response->rcode_len = 0;
+
+        *buf_size += sizeof(struct ar_hdr);
     }
     else
     {
@@ -349,135 +383,24 @@ static int handle_opt_record(struct xdp_md *ctx, struct dns_hdr *dns_hdr, int qu
 }
 #endif
 
-static inline void pkt_add_query_response(struct xdp_md *ctx, struct dns_hdr *dns_hdr, int query_length, struct a_record *a)
+static void create_query_response(struct a_record *a, char *dns_buffer, size_t *buf_size)
 {
-    void *data_end = (void *)(long)ctx->data_end;
-
-    //Set query response
-    dns_hdr->qr = 1;
-    //Set truncated to 0
-    //dns_hdr->tc = 0;
-    //Set authorative to zero
-    //dns_hdr->aa = 0;
-    //Recursion available
-    dns_hdr->ra = 1;
-    //One answer
-    dns_hdr->ans_count = bpf_htons(1);
-
-    //Start our response [query_length] bytes beyond the header
-    void *answer_start = (void *)dns_hdr + sizeof(*dns_hdr) + query_length;
     //Formulate a DNS response. Currently defaults to hardcoded query pointer + type a + class in + ttl + 4 bytes as reply.
-    struct dns_response response;
-    response.query_pointer = bpf_htons(0xc00c);
-    response.record_type = bpf_htons(0x0001);
-    response.class = bpf_htons(0x0001);
-    response.ttl = bpf_htonl(a->ttl);
-    response.data_length = bpf_htons((uint16_t)sizeof(a->ip_addr));
-
-    //Determine increment of tail size of a default DNS response and one IPv4 address (in_addr)
-    int tailadjust = answer_start + sizeof(response) + sizeof(a->ip_addr) - data_end;
-    #ifdef DEBUG
-    bpf_printk("Query length is %i", query_length);
-    bpf_printk("Answer start at %u", answer_start);
-    bpf_printk("Adjusting tail with %i bytes for query response", tailadjust);
-    bpf_printk("Current data_end: %u", data_end);
-    #endif
-
-    if (bpf_xdp_adjust_tail(ctx, tailadjust))
-    {
-        #ifdef DEBUG
-        bpf_printk("Adjust tail fail");
-        #endif
-    }
-    else
-    {
-        //Reset data_end and data pointers
-        void *data = (void *)(unsigned long)ctx->data;
-        data_end = (void *)(unsigned long)ctx->data_end;
-        #ifdef DEBUG
-        bpf_printk("New data_end %u", data_end);
-        #endif
-
-        //Boundary check
-        if (data + sizeof(struct ethhdr) + sizeof(struct iphdr) + sizeof(struct udphdr) +
-                sizeof(struct dns_hdr) + query_length + sizeof(response) + sizeof(struct in_addr) <=
-            data_end)
-        {
-            //Copy DNS response
-            __builtin_memcpy(data + sizeof(struct ethhdr) +
-                                 sizeof(struct iphdr) +
-                                 sizeof(struct udphdr) +
-                                 sizeof(struct dns_hdr) +
-                                 query_length,
-                             &response, sizeof(response));
-
-            //Copy IP address from A record
-            __builtin_memcpy(data + sizeof(struct ethhdr) +
-                                 sizeof(struct iphdr) +
-                                 sizeof(struct udphdr) +
-                                 sizeof(struct dns_hdr) +
-                                 query_length +
-                                 sizeof(response),
-                             &a->ip_addr, sizeof(a->ip_addr));
-
-            //Adjust UDP length and IP length
-            uint16_t iplen = (data_end - data) - sizeof(struct ethhdr);
-            uint16_t udplen = (data_end - data) - sizeof(struct ethhdr) - sizeof(struct iphdr);
-            struct iphdr *ip = data + sizeof(struct ethhdr);
-            struct udphdr *udp = data + sizeof(struct ethhdr) + sizeof(struct iphdr);
-
-            ip->tot_len = bpf_htons(iplen);
-            udp->len = bpf_htons(udplen);
-        }
-    }
-
+    struct dns_response *response = (struct dns_response *) &dns_buffer[0];
+    response->query_pointer = bpf_htons(0xc00c);
+    response->record_type = bpf_htons(0x0001);
+    response->class = bpf_htons(0x0001);
+    response->ttl = bpf_htonl(a->ttl);
+    response->data_length = bpf_htons((uint16_t)sizeof(a->ip_addr));
+    *buf_size += sizeof(struct dns_response);
+    //Copy IP address
+    __builtin_memcpy(&dns_buffer[*buf_size], &a->ip_addr, sizeof(struct in_addr));
+    *buf_size += sizeof(struct in_addr);
 }
-
-#ifdef EDNS
-static inline void pkt_add_ar_response(struct xdp_md *ctx, struct dns_hdr *dns_hdr, int query_length, struct ar_hdr *ar){
-    if (bpf_xdp_adjust_tail(ctx, sizeof(struct ar_hdr)))
-    {
-        #ifdef DEBUG
-        bpf_printk("Adjust tail fail for AR");
-        #endif
-    }
-    else
-    {
-        void *data_end = (void *)(long)ctx->data_end;
-        void *data = (void *)(long)ctx->data;
-
-        //Boundary check
-        if (data + sizeof(struct ethhdr) + sizeof(struct iphdr) + sizeof(struct udphdr) +
-                sizeof(struct dns_hdr) + query_length + sizeof(struct dns_response) + sizeof(struct in_addr) + sizeof(struct ar_hdr) <=
-            data_end)
-        {
-       
-            //Copy IP address from A record
-            __builtin_memcpy(data + sizeof(struct ethhdr) +
-                                 sizeof(struct iphdr) +
-                                 sizeof(struct udphdr) +
-                                 sizeof(struct dns_hdr) +
-                                 query_length +
-                                 sizeof(struct dns_response) +
-                                 sizeof(struct in_addr),
-                             ar, sizeof(struct ar_hdr));
-
-            // //Adjust UDP length and IP length
-            uint16_t iplen = (data_end - data) - sizeof(struct ethhdr);
-            uint16_t udplen = (data_end - data) - sizeof(struct ethhdr) - sizeof(struct iphdr);
-            struct iphdr *ip = data + sizeof(struct ethhdr);
-            struct udphdr *udp = data + sizeof(struct ethhdr) + sizeof(struct iphdr);
-
-            ip->tot_len = bpf_htons(iplen);
-            udp->len = bpf_htons(udplen);
-        }
-    }
-}
-#endif
 
 //Update IP checksum for IP (or ICMP) header, as specified in RFC 1071
 //To support both IP and ICMP updating of checksum, we pass the checksum_location,
-//which indicates where in the header the checksum is located. Here 16 bits need to be set to 0.
+//which indicates where in the header the checksum is located. At this location 16 bits need to be set to 0.
 static inline void update_ip_checksum(void *data, int len, uint16_t *checksum_location)
 {
     uint32_t accumulator = 0;
@@ -515,6 +438,35 @@ static inline void update_ip_checksum(void *data, int len, uint16_t *checksum_lo
     #endif
 
     *checksum_location = chk;
+}
+
+static inline void modify_dns_header_response(struct dns_hdr *dns_hdr)
+{
+    //Set query response
+    dns_hdr->qr = 1;
+    //Set truncated to 0
+    //dns_hdr->tc = 0;
+    //Set authorative to zero
+    //dns_hdr->aa = 0;
+    //Recursion available
+    dns_hdr->ra = 1;
+    //One answer
+    dns_hdr->ans_count = bpf_htons(1);
+}
+
+//Our own memcpy implementation, since __builtin_memcpy only supports static size_t n
+//TODO: Might have some performance impact compared with __builtin_memcpy
+static inline void copy_to_pkt_buf(struct xdp_md *ctx, void *dst, void *src, size_t n)
+{
+    if((void *)(long)ctx->data_end >= dst + n){
+        int i;
+        char *cdst = dst;
+        char *csrc = src;
+        for(i = 0; i < n; i+=1)
+        {
+            cdst[i] = csrc[i];
+        }
+    }
 }
 
 static inline void swap_mac(uint8_t *src_mac, uint8_t *dst_mac)
