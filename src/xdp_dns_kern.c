@@ -18,24 +18,33 @@ You should have received a copy of the GNU General Public License
 along with this program; if not, write to the Free Software
 Foundation, Inc., 59 Temple Place - Suite 330
 */
-#include <stdint.h>
+#define DEFAULT_ACTION XDP_PASS
+
 #include <linux/bpf.h>
-#include <bpf_helpers.h>
-#include <bpf_endian.h>
 #include <linux/if_ether.h>
-#include <netinet/in.h>
 #include <linux/ip.h>
 #include <linux/udp.h>
 #include <linux/version.h>
+
+//This program supports XDP in BCC and libbpf+iproute2 mode
+//Include different files depending on mode
+#ifndef BCC_SEC
+#include <netinet/in.h>
+#include <bpf_helpers.h>
+#include <bpf_endian.h>
 #include <string.h>
-#include "common.h"
+#include <stdint.h>
 //bpf_elf.h is part of iproute2
 #include <bpf_elf.h>
+#endif
 
+#include "common.h"
 
-#define DEFAULT_ACTION XDP_PASS
-
-//Hash table for DNS A Records
+//Create different BPF maps depending on if we're using libbpf or BCC
+#ifdef BCC_SEC
+BPF_HASH(xdns_a_records, struct dns_query, struct a_record);
+#else
+//Hash table for DNS A Records loaded by iproute2
 //Key is a dns_query, value is the associated IPv4 address
 struct bpf_elf_map SEC("maps") xdns_a_records = {
     .type = BPF_MAP_TYPE_HASH,
@@ -44,7 +53,7 @@ struct bpf_elf_map SEC("maps") xdns_a_records = {
     .max_elem = 65536,
     .pinning = 2, //PIN_GLOBAL_NS
 };
-
+#endif
 
 static int match_a_records(struct xdp_md *ctx, struct dns_query *q, struct a_record *a);
 static int parse_query(struct xdp_md *ctx, void *query_start, struct dns_query *q);
@@ -58,16 +67,20 @@ static inline void update_ip_checksum(void *data, int len, uint16_t *checksum_lo
 static inline void copy_to_pkt_buf(struct xdp_md *ctx, void *dst, void *src, size_t n);
 static inline void swap_mac(uint8_t *src_mac, uint8_t *dst_mac);
 
-
 char dns_buffer[512];
 
+#ifndef BCC_SEC
 SEC("prog")
+#endif
 int xdp_dns(struct xdp_md *ctx)
 {
     #ifdef DEBUG
     uint64_t start = bpf_ktime_get_ns();
     #endif
-
+    #ifdef BCC_SEC
+    char dns_buffer[512];
+    #endif
+   
     void *data_end = (void *)(unsigned long)ctx->data_end;
     void *data = (void *)(unsigned long)ctx->data;
 
@@ -258,7 +271,11 @@ static int match_a_records(struct xdp_md *ctx, struct dns_query *q, struct a_rec
     #endif
 
     struct a_record *record;
+    #ifdef BCC_SEC
+    record = xdns_a_records.lookup(q);
+    #else
     record = bpf_map_lookup_elem(&xdns_a_records, q);
+    #endif
 
     //If record pointer is not zero..
     if (record > 0)
@@ -495,6 +512,7 @@ static inline void swap_mac(uint8_t *src_mac, uint8_t *dst_mac)
     }
 }
 
-
+#ifndef BCC_SEC
 char _license[] SEC("license") = "GPL";
 __u32 _version SEC("version") = LINUX_VERSION_CODE;
+#endif

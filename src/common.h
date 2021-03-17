@@ -1,5 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later */
+#ifndef BCC_SEC
 #include <stdint.h>
+#endif
 
 #define A_RECORD_TYPE 0x0001
 #define DNS_CLASS_IN 0x0001
