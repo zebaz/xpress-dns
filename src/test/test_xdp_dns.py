@@ -4,6 +4,17 @@ from bcc import BPF, libbcc
 import ctypes
 from scapy.all import *
 
+#Struct representing the dns_query struct in common.h
+class DNS_QUERY(ctypes.Structure):
+    _fields_ = [("record_type", ctypes.c_uint16),
+                ("class", ctypes.c_uint16),
+                ("name", ctypes.c_char * 512)]
+
+#Struct representing the a_record struct in common.h
+class A_RECORD(ctypes.Structure):
+    _fields_ = [("ip_addr", ctypes.c_uint32),
+                ("ttl", ctypes.c_uint32)]
+
 
 class DnsTestCase(unittest.TestCase):
     bpf = None
@@ -19,9 +30,9 @@ class DnsTestCase(unittest.TestCase):
         retval = ctypes.c_uint32()
         duration = ctypes.c_uint32()
 
-        ret = libbcc.lib.bpf_prog_test_run(self.func.fd, 
+        ret = libbcc.lib.bpf_prog_test_run(self.func.fd,
                                            repeat,
-                                           ctypes.byref(given_packet), 
+                                           ctypes.byref(given_packet),
                                            size,
                                            ctypes.byref(packet_output),
                                            ctypes.byref(packet_output_size),
@@ -43,7 +54,12 @@ class DnsTestCase(unittest.TestCase):
 
     def test_dns_match(self):
         packet_in =  Ether() / IP(dst="1.1.1.1") / UDP() / DNS(rd=1, qd=DNSQR(qname="foo.bar"))
-        # self.bpf["xdns_a_records"][0] = 0
+#        q = DNS_QUERY(ctypes.c_uint16(1), ctypes.c_uint16(1), ctypes.create_string_buffer(b"foo.bar", 512))
+        name = "foo.bar" + ("\0" * 505)
+        q = DNS_QUERY(ctypes.c_uint16(1), ctypes.c_uint16(1), str.encode(name))
+        a = A_RECORD(ctypes.c_uint32(1), ctypes.c_uint32(120))
+
+        self.bpf["xdns_a_records"][q] = a
         self._xdp_test_run(packet_in, None, BPF.XDP_TX)
 
 
