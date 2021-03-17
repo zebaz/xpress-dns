@@ -43,6 +43,10 @@ Example: ```xdns add a foo.bar 127.0.0.1 120```
 
 Use `xdns list` to list all configured DNS records.
 
+## How to test
+Xpress DNS is compatible with BCC toolkit and can be instrumented with its Python bindings.
+You can refer to the supplied unit tests in src/test/test_xdp_dns.py for pointers on how to test the code using BCC, scapy and Python's unit test module.
+
 ## License
 This repository is licensed under GPLv2.0. 
 See LICENSE file for details.
