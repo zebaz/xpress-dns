@@ -42,20 +42,19 @@ class DnsTestCase(unittest.TestCase):
 
         self.assertEqual(retval.value, expected_return)
         if expected_packet:
-            self.assertEqual(data_out[:size_out.value], raw(expected_packet))
+            self.assertEqual(given_packet[:packet_output_size.value], raw(expected_packet))
 
     def setUp(self):
         self.bpf = BPF(src_file=b"xdp_dns_kern.c")
         self.func = self.bpf.load_func(b"xdp_dns", BPF.XDP)
 
     def test_dns_no_match(self):
-        packet_in =  Ether() / IP(dst="1.1.1.1") / UDP() / DNS(rd=1, qd=DNSQR(qname="foo.bar"))
-        self._xdp_test_run(packet_in, None, BPF.XDP_PASS)
+        packet_in =  Ether() / IP() / UDP() / DNS(rd=1, qd=DNSQR(qname="foo.bar"))
+        self._xdp_test_run(packet_in, packet_in, BPF.XDP_PASS)
 
     def test_dns_match(self):
-        packet_in =  Ether() / IP(dst="1.1.1.1") / UDP() / DNS(rd=1, qd=DNSQR(qname="foo.bar"))
-#        q = DNS_QUERY(ctypes.c_uint16(1), ctypes.c_uint16(1), ctypes.create_string_buffer(b"foo.bar", 512))
-        name = "foo.bar" + ("\0" * 505)
+        packet_in =  Ether() / IP() / UDP() / DNS(rd=1, qd=DNSQR(qname="foo.bar"))
+        name = "\3" + "foo" + "\3" + "bar" + ("\0" * 504)
         q = DNS_QUERY(ctypes.c_uint16(1), ctypes.c_uint16(1), str.encode(name))
         a = A_RECORD(ctypes.c_uint32(1), ctypes.c_uint32(120))
 
