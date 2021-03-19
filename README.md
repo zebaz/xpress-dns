@@ -23,7 +23,7 @@ By responding to DNS requests before the packet gets processed by the Linux netw
 
 ## How to build
 To build this software we use Docker to ensure a reproducable build environment.  
-With Docker installed, run the `make` command in the root of the repository in order to build the software.
+With Docker installed, run the `make` command in the root of the repository.  
 
 To build the software without Docker: install llvm, clang, libbpf-dev, iproute2 and run the `make` command in the `src` directory.
 
@@ -46,6 +46,8 @@ Use `xdns list` to list all configured DNS records.
 ## How to test
 Xpress DNS is compatible with BCC toolkit and can be instrumented with its Python bindings.  
 You can refer to the supplied unit tests in [test_xdp_dns.py](src/test/test_xdp_dns.py) for pointers on how to test the code using BCC, scapy and Python's unit test module.
+
+Build with `make DEBUG=y` to enable debug logging, which logs debug information to `/sys/kernel/debug/tracing/trace_pipe`
 
 ## License
 This repository is licensed under GPLv2.0. 
