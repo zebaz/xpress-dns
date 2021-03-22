@@ -1,5 +1,5 @@
 import unittest
-
+import codecs
 from bcc import BPF, libbcc
 import ctypes
 from scapy.all import *
@@ -29,7 +29,6 @@ class DnsTestCase(unittest.TestCase):
         packet_output_size = ctypes.c_uint32()
         retval = ctypes.c_uint32()
         duration = ctypes.c_uint32()
-
         ret = libbcc.lib.bpf_prog_test_run(self.func.fd,
                                            repeat,
                                            ctypes.byref(given_packet),
@@ -39,10 +38,10 @@ class DnsTestCase(unittest.TestCase):
                                            ctypes.byref(retval),
                                            ctypes.byref(duration))
         self.assertEqual(ret, 0)
-
         self.assertEqual(retval.value, expected_return)
+
         if expected_packet:
-            self.assertEqual(given_packet[:packet_output_size.value], raw(expected_packet))
+            self.assertEqual(packet_output[:packet_output_size.value], raw(expected_packet))
 
     def setUp(self):
         self.bpf = BPF(src_file=b"xdp_dns_kern.c")
@@ -53,14 +52,25 @@ class DnsTestCase(unittest.TestCase):
         self._xdp_test_run(packet_in, packet_in, BPF.XDP_PASS)
 
     def test_dns_match(self):
-        packet_in =  Ether() / IP() / UDP() / DNS(rd=1, qd=DNSQR(qname="foo.bar"))
+        packet_in =  (Ether(dst="aa:bb:cc:dd:ee:ff", src="ff:aa:ff:aa:ff:aa") /
+                      IP() /
+                      UDP(sport=50000, dport=53) /
+                      DNS(rd=1, qd=DNSQR(qname="foo.bar")))
+
+        #chksum 5213
+        packet_out = (Ether(dst="ff:aa:ff:aa:ff:aa", src="aa:bb:cc:dd:ee:ff")/
+                      IP()/
+                      UDP(sport=53, dport=50000, chksum=0)/
+                      DNS(qr=1, rd=1, ra=1, ancount=1,
+                          qd=DNSQR(qname="foo.bar"),
+                          an=DNSRR(rrname=codecs.decode("c00c", 'hex'), type="A", rclass="IN", ttl=120, rdlen=4, rdata="1.2.3.4")))
+
         name = "\3" + "foo" + "\3" + "bar" + ("\0" * 504)
         q = DNS_QUERY(ctypes.c_uint16(1), ctypes.c_uint16(1), str.encode(name))
-        a = A_RECORD(ctypes.c_uint32(1), ctypes.c_uint32(120))
+        a = A_RECORD(ctypes.c_uint32(67305985), ctypes.c_uint32(120))
 
         self.bpf["xdns_a_records"][q] = a
-        self._xdp_test_run(packet_in, None, BPF.XDP_TX)
-
+        self._xdp_test_run(packet_in, packet_out, BPF.XDP_TX)
 
 if __name__ == '__main__':
     unittest.main()
