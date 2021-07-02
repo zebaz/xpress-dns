@@ -1,6 +1,6 @@
 /*
 Xpress DNS: Experimental XDP DNS responder
-Copyright (C) 2020 Bas Schalbroeck <schalbroeck@gmail.com>
+Copyright (C) 2021 Bas Schalbroeck <schalbroeck@gmail.com>
 
 SPDX-License-Identifier: GPL-2.0-or-later
 
@@ -80,10 +80,20 @@ int main(int argc, char **argv)
         if (strcmp(argv[1], "add") == 0 || strcmp(argv[1], "remove") == 0)
         {
             struct in_addr ip_addr;
-            if (inet_aton(argv[4], &ip_addr) == 0)
+
+            //Check for 'A' record
+            if (strcmp(argv[2], "a") == 0 || strcmp(argv[2], "A") == 0)
             {
-                printf("ERROR: Invalid IP address\n");
-                ret = EFAULT;
+                if (inet_aton(argv[4], &ip_addr) == 0)
+                {
+                    printf("ERROR: Invalid IP address\n");
+                    ret = EINVAL;
+                    return ret;
+                }
+
+            } else {
+                printf("ERROR: %s is not a DNS record type.\n", argv[2]);
+                ret = EINVAL;   
                 return ret;
             }
 
