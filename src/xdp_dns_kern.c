@@ -429,9 +429,8 @@ static void create_query_response(struct a_record *a, char *dns_buffer, size_t *
     *buf_size += sizeof(struct in_addr);
 }
 
-//Update IP checksum for IP (or ICMP) header, as specified in RFC 1071
-//To support both IP and ICMP updating of checksum, we pass the checksum_location,
-//which indicates where in the header the checksum is located. At this location 16 bits need to be set to 0.
+//Update IP checksum for IP header, as specified in RFC 1071
+//The checksum_location is passed as a pointer. At this location 16 bits need to be set to 0.
 static inline void update_ip_checksum(void *data, int len, uint16_t *checksum_location)
 {
     uint32_t accumulator = 0;
@@ -485,17 +484,36 @@ static inline void modify_dns_header_response(struct dns_hdr *dns_hdr)
     dns_hdr->ans_count = bpf_htons(1);
 }
 
-//Our own memcpy implementation, since __builtin_memcpy only supports static size_t n
-//TODO: Might have some performance impact compared with __builtin_memcpy
+//__builtin_memcpy only supports static size_t
+//The following function is a memcpy wrapper that uses __builtin_memcpy when size_t n is known.
+//Otherwise it uses our own naive & slow memcpy routine
 static inline void copy_to_pkt_buf(struct xdp_md *ctx, void *dst, void *src, size_t n)
 {
+    //Boundary check
     if((void *)(long)ctx->data_end >= dst + n){
         int i;
         char *cdst = dst;
         char *csrc = src;
-        for(i = 0; i < n; i+=1)
+
+        //For A records, pkt_buf is either 16 or 27 bytes, depending if OPT record is requested.
+        //Use __builtin_memcpy for this. Otherwise, use our own slow, naive memcpy implementation.
+        switch(n)
         {
-            cdst[i] = csrc[i];
+            case 16:
+                __builtin_memcpy(cdst, csrc, 16);
+                bpf_printk("16");
+                break;
+            
+            case 27:
+                __builtin_memcpy(cdst, csrc, 27);
+                bpf_printk("27");
+                break;
+
+            default:
+                for(i = 0; i < n; i+=1)
+                {
+                    cdst[i] = csrc[i];
+                }
         }
     }
 }
