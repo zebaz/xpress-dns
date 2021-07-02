@@ -12,7 +12,11 @@ builder:
 
 xdp_dns: builder
 	docker run --rm -ti -v$(shell pwd):/input -v$(shell pwd)/build:/output \
-	bpf-builder sh -c "cd /input/src && make DEBUG=$(DEBUG) FEATURE_EDNS=$(EDNS)"
+       	bpf-builder sh -c "cd /input/src && make DEBUG=$(DEBUG) FEATURE_EDNS=$(EDNS)"
+
+test: builder
+	docker run --privileged --rm -ti -v$(shell pwd):/input -v$(shell pwd)/build:/output \
+	bpf-builder sh -c "cd /input/src && python3 test/test_xdp_dns.py"
 
 clean:
 	docker rmi bpf-builder
