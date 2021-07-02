@@ -1,6 +1,6 @@
 /*
 Xpress DNS: Experimental XDP DNS responder
-Copyright (C) 2020 Bas Schalbroeck <schalbroeck@gmail.com>
+Copyright (C) 2021 Bas Schalbroeck <schalbroeck@gmail.com>
 
 SPDX-License-Identifier: GPL-2.0-or-later
 
@@ -45,7 +45,7 @@ Foundation, Inc., 59 Temple Place - Suite 330
 BPF_HASH(xdns_a_records, struct dns_query, struct a_record);
 #else
 //Hash table for DNS A Records loaded by iproute2
-//Key is a dns_query, value is the associated IPv4 address
+//Key is a dns_query struct, value is the associated IPv4 address
 struct bpf_elf_map SEC("maps") xdns_a_records = {
     .type = BPF_MAP_TYPE_HASH,
     .size_key = sizeof(struct dns_query),
@@ -495,7 +495,7 @@ static inline void copy_to_pkt_buf(struct xdp_md *ctx, void *dst, void *src, siz
         char *cdst = dst;
         char *csrc = src;
 
-        //For A records, pkt_buf is either 16 or 27 bytes, depending if OPT record is requested.
+        //For A records, src is either 16 or 27 bytes, depending if OPT record is requested.
         //Use __builtin_memcpy for this. Otherwise, use our own slow, naive memcpy implementation.
         switch(n)
         {

@@ -43,9 +43,10 @@ Example: ```xdns add a foo.bar 127.0.0.1 120```
 
 Use `xdns list` to list all configured DNS records.
 
-## How to test
+## How to test & debug
 Xpress DNS is compatible with BCC toolkit and can be instrumented with its Python bindings.  
 You can refer to the supplied unit tests in [test_xdp_dns.py](src/test/test_xdp_dns.py) for pointers on how to test the code using BCC, scapy and Python's unit test module.
+Run `make test` in the root directory to run the supplied unit tests.
 
 Build with `make DEBUG=y` to enable debug logging, which logs debug information to `/sys/kernel/debug/tracing/trace_pipe`
 
