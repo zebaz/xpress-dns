@@ -501,12 +501,10 @@ static inline void copy_to_pkt_buf(struct xdp_md *ctx, void *dst, void *src, siz
         {
             case 16:
                 __builtin_memcpy(cdst, csrc, 16);
-                bpf_printk("16");
                 break;
             
             case 27:
                 __builtin_memcpy(cdst, csrc, 27);
-                bpf_printk("27");
                 break;
 
             default:
